@@ -30,23 +30,29 @@ from timeit import default_timer as timer
 from matscidata import MatSciDataset
 from polycrystaldata import PolyCrystalDataset
 from voronoidata import VoronoiDataset
-
+from microstructure import MicrostructureDataset
 import torch.nn.init as init
 
+import matplotlib.pyplot as plt
+import regress
+from regress import *
 # lsun lmdb data set can be download via https://github.com/fyu/lsun
 # 64x64 ImageNet at http://image-net.org/small/download.php
 
-DATA_DIR = './datasets/voronoi/train_30000_lhs.h5'
-VAL_DIR = './datasets/voronoi/valid_6000_lhs.h5'
+# DATA_DIR = './datasets/voronoi/train_30000_lhs.h5'
+# VAL_DIR = './datasets/voronoi/valid_6000_lhs.h5'
+DATA_DIR = '/data/Bernard/DARPA_data/pytorch_data_train.npy'
+VAL_DIR = '/data/Bernard/DARPA_data/pytorch_data_test.npy'
 
-IMAGE_DATA_SET = 'voronoi'
+#IMAGE_DATA_SET = 'voronoi'
+IMAGE_DATA_SET = 'microstructure'
 # change this to something else, e.g. 'imagenets' or 'raw' if your data is just a folder of raw images.
 # Example:
 # IMAGE_DATA_SET = 'raw'
 # If you use lmdb, you'll need to write the loader by yourself. Please check load_data function
 
 
-torch.cuda.set_device(1)        # Using 1080
+torch.cuda.set_device(0)        # Using 1080
 
 TRAINING_CLASS = [
     'bedroom_train']  # IGNORE this if you are NOT training on lsun, or if you want to train on other classes of lsun, then change it accordingly
@@ -61,7 +67,8 @@ START_ITER = 0  # starting iteration
 # OUTPUT_PATH = './model_outputs_polycrystals2/'  # output path where result (.e.g drawing images, cost, chart) will be stored
 OUTPUT_PATH = './output/Debugging/'
 # MODE = 'wgan-gp'
-DIM = 64  # Model dimensionality
+#DIM = 64  # Model dimensionality
+DIM = 128
 CRITIC_ITERS = 5  # How many iterations to train the critic for
 GENER_ITERS = 1
 N_GPUS = 1  # Number of GPUs
@@ -71,8 +78,8 @@ END_ITER = 100000  # How many iterations to train for
 LAMBDA = 10  # Gradient penalty lambda hyperparameter
 OUTPUT_DIM = DIM * DIM * 6 # Number of pixels in each image
 PJ_ITERS = 5
-INV_PARAM = 'p1'
-
+#INV_PARAM = 'p1'
+INV_PARAM = 'J'
 
 # def showMemoryUsage(device=1):
 #     gpu_stats = gpustat.GPUStatCollection.new_query()
@@ -95,6 +102,9 @@ def proj_loss(fake_data, real_data):
         return torch.abs(p1_fn(fake_data) - p1_fn(real_data))
     elif INV_PARAM == 'p2':
         return torch.norm(p2_fn(fake_data) - p2_fn(real_data))
+    elif INV_PARAM == 'J':
+        return torch.norm(p2_fn(fake_data) - p2_fn(real_data))
+
 
 
 def weights_init(m):
@@ -128,6 +138,8 @@ def load_data(path_to_folder, train):
         dataset = PolyCrystalDataset(path_to_folder, mode=train)
     elif IMAGE_DATA_SET == 'voronoi':
         dataset = VoronoiDataset(path_to_folder)
+    elif IMAGE_DATA_SET == 'microstructure':
+        dataset = MicrostructureDataset(path_to_folder)
     else:
         dataset = datasets.ImageFolder(root=path_to_folder, transform=data_transform)
     dataset_loader = torch.utils.data.DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True,
@@ -190,51 +202,15 @@ def generate_image(netG, noise=None, lv=None):
     return samples
 
 
-def gen_rand_noise():                   # z
+def gen_rand_noise(): # z
     noise = torch.randn(BATCH_SIZE, 128)
     noise = noise.to(device)
-
     return noise
-
-
-cuda_available = torch.cuda.is_available()
-device = torch.device("cuda" if cuda_available else "cpu")
-fixed_noise = gen_rand_noise()
-
-if not os.path.exists(OUTPUT_PATH):
-    os.makedirs(OUTPUT_PATH)
-
-if RESTORE_MODE:
-    aG = torch.load(OUTPUT_PATH + "generator.pt")
-    aD = torch.load(OUTPUT_PATH + "discriminator.pt")
-else:
-    # if INV_PARAM == 'p1':
-    # aG = GoodGenerator(64, DIM * DIM * 6, ctrl_dim=0)
-    aG = GoodGenerator(64, DIM * DIM * 6, ctrl_dim=CATEGORY)
-    # else:
-    #    aG = GoodGenerator(64, 64*64*1, ctrl_dim=44)
-    aD = GoodDiscriminator(64)
-
-    aG.apply(weights_init)
-    aD.apply(weights_init)
-
-LR = 1e-4
-optimizer_g = torch.optim.Adam(aG.parameters(), lr=LR, betas=(0, 0.9))
-optimizer_d = torch.optim.Adam(aD.parameters(), lr=LR, betas=(0, 0.9))
-optimizer_pj = torch.optim.Adam(aG.parameters(), lr=LR, betas=(0, 0.9))     # Projection Loss
-one = torch.FloatTensor([1])
-mone = one * -1
-aG = aG.to(device)
-aD = aD.to(device)
-one = one.to(device)
-mone = mone.to(device)
-
-writer = SummaryWriter()
-
 
 # Reference: https://github.com/caogang/wgan-gp/blob/master/gan_cifar10.py
 def train():
     print("Loading the Training Data")
+    #load data
     dataloader = training_data_loader()
     dataiter = iter(dataloader)
     for iteration in range(START_ITER, END_ITER):
@@ -251,28 +227,49 @@ def train():
         except StopIteration:
             dataiter = iter(dataloader)
             real_data = dataiter.next()
+
+        # p1 and p2_function are invariant checkers in models/checker.py (p1 for now)
+        # here regression should replace p1_fn, but should use real label or regressor
         if INV_PARAM == 'p1':
             real_p1 = p1_fn(real_data)
         elif INV_PARAM == 'p2':
             real_p1 = p2_fn(real_data.to(device))
+        elif INV_PARAM == 'J':
+            real_data = real_data.unsqueeze(1)
+            real_p1 = predict_J(real_data.to(device))
         # real_p1 = real_label.unsqueeze(1)        # This is the label for the dataset. Currently either 20 or 100.
         real_p1 = real_p1.to(device)
-        # real_p1 = None
+
+
         for i in range(GENER_ITERS):
             print("Generator iters: " + str(i))
             aG.zero_grad()
-            noise = gen_rand_noise()
+            noise = gen_rand_noise()    #generate random z vector (batch,128)
             noise.requires_grad_(True)
             # fake_data = aG(noise)
+
+            #z (batch,128), real_p1 (batch), making it (batch,129)?
+            #first epoch generating all 1, is that right?
             fake_data = aG(noise, real_p1)
             gen_cost = aD(fake_data)
             gen_cost = gen_cost.mean()
-            gen_cost.backward(mone)
+            # gen_cost.backward(mone)
+            # mone is shape (1), using ,mone[0] for now to fix size problem 
+            #gen_cost.backward(mone[0])
+            #trying without argument
+            gen_cost.backward()
             gen_cost = -gen_cost
+
+            #following SGAN seqeunce
+            # gen_cost = -gen_cost
+            # gen_cost.backward()
+
 
         optimizer_g.step()
         end = timer()
+
         print(f'---train G elapsed time: {end - start}')
+        #stopped here
         print(fake_data.min(), real_data.min())
         # Projection steps
         pj_cost = None
@@ -283,6 +280,7 @@ def train():
             noise.requires_grad=True
             fake_data = aG(noise, real_p1)
             # pj_cost = proj_loss(fake_data.view(-1,1,DIM, DIM), real_data.to(device))
+            #computes a normed error of real and fake data
             pj_cost = proj_loss(fake_data.view(-1, CATEGORY, DIM, DIM), real_data.to(device))
             pj_cost = pj_cost.mean()
             pj_cost.backward()
@@ -312,8 +310,11 @@ def train():
                 noisev = noise  # totally freeze G, training D
                 if INV_PARAM == 'p1':
                    real_p1 = p1_fn(real_data)
-                else:
+                elif INV_PARAM == 'p2':
                    real_p1 = p2_fn(real_data)
+                elif INV_PARAM == 'J':
+                    real_data = real_data.unsqueeze(1)
+                    real_p1 = predict_J(real_data)
                 # real_p1_v = real_p1
                 # real_p1 = batch_label.unsqueeze(1)  # This is the label for the dataset. Currently either 20 or 100.
                 real_p1 = real_p1.to(device)
@@ -350,7 +351,7 @@ def train():
                 writer.add_scalar('data/disc_fake', disc_fake, iteration)
                 writer.add_scalar('data/disc_real', disc_real, iteration)
                 writer.add_scalar('data/gradient_pen', gradient_penalty, iteration)
-                #                writer.add_scalar('data/p1_cost', pj_cost.cpu().detach(), iteration)
+                # writer.add_scalar('data/p1_cost', pj_cost.cpu().detach(), iteration)
                 # writer.add_scalar('data/d_conv_weight_mean', [i for i in aD.children()][0].conv.weight.data.clone().mean(), iteration)
                 # writer.add_scalar('data/d_linear_weight_mean', [i for i in aD.children()][-1].weight.data.clone().mean(), iteration)
                 # writer.add_scalar('data/fake_data_mean', fake_data.mean())
@@ -422,7 +423,45 @@ def train():
             torch.save(aD, OUTPUT_PATH + "discriminator.pt")
         lib.plot.tick()
 
+if __name__ == '__main__':
 
-train()
+    cuda_available = torch.cuda.is_available()
+    device = torch.device("cuda" if cuda_available else "cpu")
+    fixed_noise = gen_rand_noise()
+
+    if not os.path.exists(OUTPUT_PATH):
+        os.makedirs(OUTPUT_PATH)
+
+    if RESTORE_MODE:
+        aG = torch.load(OUTPUT_PATH + "generator.pt")
+        aD = torch.load(OUTPUT_PATH + "discriminator.pt")
+    else:
+        # if INV_PARAM == 'p1':
+        #                    dim=DIM, output_dim=OUTPUT_DIM, ctrl_dim=0
+        # aG = GoodGenerator(64, DIM * DIM * 6, ctrl_dim=0)
+        aG = GoodGenerator(128, DIM * DIM * 6, ctrl_dim=CATEGORY)
+        # else:
+        #    aG = GoodGenerator(64, 64*64*1, ctrl_dim=44)
+        aD = GoodDiscriminator(128)
+
+        #initilize gen and disc weights
+        aG.apply(weights_init)
+        aD.apply(weights_init)
+
+    LR = 1e-4
+    optimizer_g = torch.optim.Adam(aG.parameters(), lr=LR, betas=(0, 0.9))  # Gen loss
+    optimizer_d = torch.optim.Adam(aD.parameters(), lr=LR, betas=(0, 0.9))  # Disc loss
+    optimizer_pj = torch.optim.Adam(aG.parameters(), lr=LR, betas=(0, 0.9)) # Projection Loss
+    #one = torch.FloatTensor([1])
+    one = torch.FloatTensor([1])
+    mone = one * -1
+    aG = aG.to(device)
+    aD = aD.to(device)
+    one = one.to(device)
+    mone = mone.to(device)
+
+    writer = SummaryWriter()
+
+    train()
 
 

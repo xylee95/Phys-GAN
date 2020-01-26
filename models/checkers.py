@@ -7,8 +7,10 @@ import torch
 from matplotlib import pyplot as plt
 # from gan_train import BATCH_SIZE
 
-DIM = 64
-CATEGORY = 6
+DIM = 128
+#DIM = 64
+#CATEGORY = 6
+CATEGORY = 1
 PI = 3.1416
 BATCH_SIZE = 64
 def get_radial_indices(X):

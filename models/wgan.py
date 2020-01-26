@@ -2,9 +2,13 @@ from torch import nn
 from torch.autograd import grad
 import torch
 
-CATEGORY = 6
-DIM = 64
-OUTPUT_DIM = DIM*DIM*6
+# CATEGORY = 6
+# DIM = 64
+# OUTPUT_DIM = DIM*DIM*6
+
+CATEGORY = 1
+DIM = 128
+OUTPUT_DIM = DIM*DIM*1
 
 
 class MyConvo2d(nn.Module):
@@ -168,17 +172,22 @@ class GoodGenerator(nn.Module):
     def __init__(self, dim=DIM, output_dim=OUTPUT_DIM, ctrl_dim=0):
         super(GoodGenerator, self).__init__()
 
+        # CATEGORY = 6 changed to 1
+        # DIM = 64 changed to 128
+        # OUTPUT_DIM = DIM*DIM*6 changed to DIM*DIM*1
+        #c, h , hw
         self.dim = dim
         #self.input_dim = input_dim
         #Adding latent vectors for control knobs
         self.ctrl_dim = ctrl_dim
         self.output_dim = output_dim
         self.ln1 = nn.Linear(128+self.ctrl_dim, 4*4*8*self.dim)
+        #input, output, kernel size
         self.rb1 = ResidualBlock(8*self.dim, 8*self.dim, 3, resample = 'up')
         self.rb2 = ResidualBlock(8*self.dim, 4*self.dim, 3, resample = 'up')
         self.rb3 = ResidualBlock(4*self.dim, 2*self.dim, 3, resample = 'up')
         self.rb4 = ResidualBlock(2*self.dim, 1*self.dim, 3, resample = 'up')
-        # self.rb5 = ResidualBlock(1*self.dim, 1*self.dim, 3, resample='up')
+        self.rb5 = ResidualBlock(1*self.dim, 1*self.dim, 3, resample = 'up')
         self.softmax = nn.Softmax2d()
         self.bn  = nn.BatchNorm2d(self.dim)
 
@@ -198,7 +207,7 @@ class GoodGenerator(nn.Module):
         output = self.rb2(output)
         output = self.rb3(output)
         output = self.rb4(output)
-        # output = self.rb5(output)
+        output = self.rb5(output)
         output = self.bn(output)
         output = self.relu(output)
         output = self.conv1(output)
