@@ -105,8 +105,6 @@ def proj_loss(fake_data, real_data):
     elif INV_PARAM == 'J':
         return torch.norm(p2_fn(fake_data) - p2_fn(real_data))
 
-
-
 def weights_init(m):
     if isinstance(m, MyConvo2d):
         if m.conv.weight is not None:
@@ -121,7 +119,6 @@ def weights_init(m):
             init.xavier_uniform_(m.weight)
         if m.bias is not None:
             init.constant_(m.bias, 0.0)
-
 
 def load_data(path_to_folder, train):
     data_transform = transforms.Compose([
@@ -201,21 +198,40 @@ def generate_image(netG, noise=None, lv=None):
     # samples = samples * 0.5 + 0.5
     return samples
 
-
 def gen_rand_noise(): # z
     noise = torch.randn(BATCH_SIZE, 128)
     noise = noise.to(device)
     return noise
 
+def load_regressor():
+    device = torch.device("cuda")
+
+    model = regress.Net()
+    #if load using state_dict, everythin becomes 1
+    model = torch.load('regressor.pt')
+    model = Net().to(device)
+    model.eval()
+    return model
+
+def predict_J(model,x):
+    J = model(x)
+    return J
+
 # Reference: https://github.com/caogang/wgan-gp/blob/master/gan_cifar10.py
 def train():
+    print('Loading surrogate model weights')
+    regressor = load_regressor()
+    for params in regressor.parameters(): #Freeze surrogate
+        params.requires_grad_(False)
     print("Loading the Training Data")
     #load data
     dataloader = training_data_loader()
     dataiter = iter(dataloader)
     for iteration in range(START_ITER, END_ITER):
         start_time = time.time()
+        print("-------------------------")
         print("Iter: " + str(iteration))
+        print("-------------------------")
         start = timer()
         # ---------------------TRAIN G------------------------
         for p in aD.parameters():
@@ -236,8 +252,9 @@ def train():
             real_p1 = p2_fn(real_data.to(device))
         elif INV_PARAM == 'J':
             real_data = real_data.unsqueeze(1)
-            real_p1 = predict_J(real_data.to(device))
-        # real_p1 = real_label.unsqueeze(1)        # This is the label for the dataset. Currently either 20 or 100.
+            real_p1 = predict_J(regressor , real_data.to(device))
+        #real_p1 = real_label.unsqueeze(1)        # This is the label for the dataset. Currently either 20 or 100.
+        real_p1 = real_p1.unsqueeze(1)
         real_p1 = real_p1.to(device)
 
 
@@ -314,9 +331,10 @@ def train():
                    real_p1 = p2_fn(real_data)
                 elif INV_PARAM == 'J':
                     real_data = real_data.unsqueeze(1)
-                    real_p1 = predict_J(real_data)
+                    real_p1 = predict_J(regressor, real_data)
                 # real_p1_v = real_p1
                 # real_p1 = batch_label.unsqueeze(1)  # This is the label for the dataset. Currently either 20 or 100.
+                real_p1 = real_p1.unsqueeze(1)
                 real_p1 = real_p1.to(device)
             end = timer();
             print(f'---gen G elapsed time: {end-start}')

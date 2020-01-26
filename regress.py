@@ -68,18 +68,17 @@ class Net(nn.Module):
 		output = h
 		return output
 
-def predict_J(x):
+def test(x):
 	
 	device = torch.device("cuda")
-
-	# model = Net()
-	# #if load using state_dict, everythin becomes 1
-	# model = torch.load('regressor.pt')
-	# model = Net().to(device)
-	# model.eval()
-	# J = model(x)
+	model = Net()
+	#if load using state_dict, everythin becomes 1
+	model = torch.load('regressor.pt')
+	model = Net().to(device)
+	model.eval()
+	J = model(x)
 
 	#test without network
-	J = x.mean(dim=(2,3))
-	J.squeeze(1)
+	# J = x.mean(dim=(2,3))
+	# J.squeeze(1)
 	return J
