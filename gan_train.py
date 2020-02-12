@@ -72,7 +72,7 @@ DIM = 128
 CRITIC_ITERS = 5  # How many iterations to train the critic for
 GENER_ITERS = 1
 N_GPUS = 1  # Number of GPUs
-BATCH_SIZE = 32  # Batch size. Must be a multiple of N_GPUS
+BATCH_SIZE = 8  # Batch size. Must be a multiple of N_GPUS
 END_ITER = 100000  # How many iterations to train for
 # END_ITER = 1
 LAMBDA = 10  # Gradient penalty lambda hyperparameter
@@ -93,7 +93,7 @@ INV_PARAM = 'J'
 #         #TODO: Needs to be fixed
 #         return torch.norm(grain_regularize_fn(fake_data, label))
 
-def proj_loss(fake_data, real_data):
+def proj_loss(fake_data, real_data, model):
     """
     Fake data requires to be pushed from tanh range to [0, 1]
     """
@@ -103,7 +103,8 @@ def proj_loss(fake_data, real_data):
     elif INV_PARAM == 'p2':
         return torch.norm(p2_fn(fake_data) - p2_fn(real_data))
     elif INV_PARAM == 'J':
-        return torch.norm(p2_fn(fake_data) - p2_fn(real_data))
+        p_loss = torch.norm(predict_J(model, fake_data) - predict_J(model, real_data))
+        return p_loss
 
 def weights_init(m):
     if isinstance(m, MyConvo2d):
@@ -168,7 +169,6 @@ def calc_gradient_penalty(netD, real_data, fake_data):
     interpolates.requires_grad_(True)
 
     disc_interpolates = netD(interpolates)
-
     gradients = autograd.grad(outputs=disc_interpolates, inputs=interpolates,
                               grad_outputs=torch.ones(disc_interpolates.size()).to(device),
                               create_graph=True, retain_graph=True, only_inputs=True)[0]
@@ -195,7 +195,6 @@ def generate_image(netG, noise=None, lv=None):
     samples = torch.argmax(samples.view(BATCH_SIZE, CATEGORY, DIM, DIM), dim=1).unsqueeze(1)
     samples = (samples * 255/CATEGORY)
     samples = samples.int()
-    # samples = samples * 0.5 + 0.5
     return samples
 
 def gen_rand_noise(): # z
@@ -203,30 +202,28 @@ def gen_rand_noise(): # z
     noise = noise.to(device)
     return noise
 
-def load_regressor():
-    device = torch.device("cuda")
-
-    model = regress.Net()
-    #if load using state_dict, everythin becomes 1
-    model = torch.load('regressor.pt')
-    model = Net().to(device)
-    model.eval()
-    return model
-
 def predict_J(model,x):
+    model.eval()
     J = model(x)
     return J
 
 # Reference: https://github.com/caogang/wgan-gp/blob/master/gan_cifar10.py
 def train():
     print('Loading surrogate model weights')
-    regressor = load_regressor()
+
+    #------Load regressor as invariant checker--------#
+    regressor = regress.Net()
+    regressor.load_state_dict(torch.load('run_002_regressor.pt'))
+    regressor.eval()
+    regressor.to(device)
     for params in regressor.parameters(): #Freeze surrogate
         params.requires_grad_(False)
+
+    #-------Load training data---------------------
     print("Loading the Training Data")
-    #load data
     dataloader = training_data_loader()
     dataiter = iter(dataloader)
+
     for iteration in range(START_ITER, END_ITER):
         start_time = time.time()
         print("-------------------------")
@@ -239,10 +236,12 @@ def train():
 
         gen_cost = None
         try:
-            real_data = next(dataiter)
+            #real_data = next(dataiter)
+            real_data, real_p1 = next(dataiter)
         except StopIteration:
             dataiter = iter(dataloader)
-            real_data = dataiter.next()
+            #real_data = dataiter.next()
+            real_data, real_p1 = dataiter.next()
 
         # p1 and p2_function are invariant checkers in models/checker.py (p1 for now)
         # here regression should replace p1_fn, but should use real label or regressor
@@ -251,43 +250,35 @@ def train():
         elif INV_PARAM == 'p2':
             real_p1 = p2_fn(real_data.to(device))
         elif INV_PARAM == 'J':
-            real_data = real_data.unsqueeze(1)
-            real_p1 = predict_J(regressor , real_data.to(device))
+            real_data = real_data.unsqueeze(1) #batch, 1, 128, 128
+            #real_p1 = predict_J(regressor , real_data.to(device))
+            real_p1 = regressor(real_data.to(device))
         #real_p1 = real_label.unsqueeze(1)        # This is the label for the dataset. Currently either 20 or 100.
         real_p1 = real_p1.unsqueeze(1)
         real_p1 = real_p1.to(device)
-
 
         for i in range(GENER_ITERS):
             print("Generator iters: " + str(i))
             aG.zero_grad()
             noise = gen_rand_noise()    #generate random z vector (batch,128)
             noise.requires_grad_(True)
-            # fake_data = aG(noise)
 
             #z (batch,128), real_p1 (batch), making it (batch,129)?
-            #first epoch generating all 1, is that right?
             fake_data = aG(noise, real_p1)
+            #print(fake_data)
             gen_cost = aD(fake_data)
             gen_cost = gen_cost.mean()
-            # gen_cost.backward(mone)
-            # mone is shape (1), using ,mone[0] for now to fix size problem 
-            #gen_cost.backward(mone[0])
-            #trying without argument
-            gen_cost.backward()
             gen_cost = -gen_cost
-
-            #following SGAN seqeunce
-            # gen_cost = -gen_cost
-            # gen_cost.backward()
-
+            gen_cost.backward()
 
         optimizer_g.step()
         end = timer()
 
         print(f'---train G elapsed time: {end - start}')
-        #stopped here
-        print(fake_data.min(), real_data.min())
+        
+        print('Fake Min:', fake_data.min(), 'Real Min:',real_data.min())
+        print('Fake Max:', fake_data.max(), 'Real Max:',real_data.max())
+ 
         # Projection steps
         pj_cost = None
         for i in range(PJ_ITERS):
@@ -298,7 +289,7 @@ def train():
             fake_data = aG(noise, real_p1)
             # pj_cost = proj_loss(fake_data.view(-1,1,DIM, DIM), real_data.to(device))
             #computes a normed error of real and fake data
-            pj_cost = proj_loss(fake_data.view(-1, CATEGORY, DIM, DIM), real_data.to(device))
+            pj_cost = proj_loss(fake_data.view(-1, CATEGORY, DIM, DIM), real_data.to(device), regressor.to(device))
             pj_cost = pj_cost.mean()
             pj_cost.backward()
             optimizer_pj.step()
@@ -315,10 +306,13 @@ def train():
             # gen fake data and load real data
             noise = gen_rand_noise()
             # batch, batch_label = next(dataiter, None)
-            batch = next(dataiter)
+            # batch = next(dataiter)
+            batch, label = next(dataiter)
             if batch is None:
+                #dataiter = iter(dataloader)
+                #batch = dataiter.next()
                 dataiter = iter(dataloader)
-                batch = dataiter.next()
+                batch, label = dataiter.next()
             # batch = batch[0] #batch[1] contains labels
             real_data = batch.to(device=device, dtype=torch.float)  # TODO: modify load_data for each loading
             # real_data = batch.to(device)
@@ -331,7 +325,9 @@ def train():
                    real_p1 = p2_fn(real_data)
                 elif INV_PARAM == 'J':
                     real_data = real_data.unsqueeze(1)
-                    real_p1 = predict_J(regressor, real_data)
+                    #real_p1 = predict_J(regressor, real_data)
+                    #real_p1 = label
+                    real_p1 = regressor(real_data.to(device))
                 # real_p1_v = real_p1
                 # real_p1 = batch_label.unsqueeze(1)  # This is the label for the dataset. Currently either 20 or 100.
                 real_p1 = real_p1.unsqueeze(1)
@@ -399,7 +395,7 @@ def train():
         lib.plot.plot(OUTPUT_PATH + 'train_disc_cost', disc_cost.cpu().data.numpy())
         lib.plot.plot(OUTPUT_PATH + 'train_gen_cost', gen_cost.cpu().data.numpy())
         lib.plot.plot(OUTPUT_PATH + 'wasserstein_distance', w_dist.cpu().data.numpy())
-        if iteration % 10 == 0:
+        if iteration % 50 == 0:
             fake_2 = torch.argmax(fake_data.view(BATCH_SIZE, CATEGORY, DIM, DIM), dim = 1).unsqueeze(1)
             fake_2 = (fake_2 * 255/6)
             fake_2 = fake_2.int()
@@ -414,7 +410,8 @@ def train():
             for _, images in enumerate(val_loader):
                 # print(images[0])
                 # print(images[0].shape)
-                imgs = torch.FloatTensor(np.float32(images))
+                # imgs = torch.FloatTensor(np.float32(images))
+                imgs = torch.FloatTensor(np.float32(images[0]))
                 # print(imgs.size())
                 imgs = imgs.to(device)
                 with torch.no_grad():
@@ -457,10 +454,10 @@ if __name__ == '__main__':
         # if INV_PARAM == 'p1':
         #                    dim=DIM, output_dim=OUTPUT_DIM, ctrl_dim=0
         # aG = GoodGenerator(64, DIM * DIM * 6, ctrl_dim=0)
-        aG = GoodGenerator(128, DIM * DIM * 6, ctrl_dim=CATEGORY)
+        aG = GoodGenerator(dim=128, output_dim = DIM * DIM * 6, ctrl_dim=CATEGORY)
         # else:
         #    aG = GoodGenerator(64, 64*64*1, ctrl_dim=44)
-        aD = GoodDiscriminator(128)
+        aD = GoodDiscriminator(dim=128)
 
         #initilize gen and disc weights
         aG.apply(weights_init)

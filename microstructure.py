@@ -28,15 +28,29 @@ class MicrostructureDataset(Dataset):
 
         self.transform = transform
 
+    #only return images
+    # def __getitem__(self, index):
+
+    #     #x = torch.FloatTensor(self.data[..., index]).unsqueeze(0)
+    #     x = torch.FloatTensor(np.float32(self.data[index]))
+    #     if self.transform is not None:
+    #         x = self.transform(x)
+    #     #print(x.min(), x.max())
+    #     #p1 = torch.FloatTensor(x.mean())
+    #     return x
+
+    #return image and labels
     def __getitem__(self, index):
 
         #x = torch.FloatTensor(self.data[..., index]).unsqueeze(0)
         x = torch.FloatTensor(np.float32(self.data[index]))
         if self.transform is not None:
             x = self.transform(x)
+
+        y = torch.FloatTensor(np.expand_dims(np.float32(self.label[index]),axis=0))
         #print(x.min(), x.max())
         #p1 = torch.FloatTensor(x.mean())
-        return x
+        return x, y
     
     def __len__(self):
         return self.data.shape[0]
