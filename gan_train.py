@@ -72,8 +72,8 @@ DIM = 128
 CRITIC_ITERS = 5  # How many iterations to train the critic for
 GENER_ITERS = 1
 N_GPUS = 1  # Number of GPUs
-BATCH_SIZE = 8  # Batch size. Must be a multiple of N_GPUS
-END_ITER = 100000  # How many iterations to train for
+BATCH_SIZE = 16  # Batch size. Must be a multiple of N_GPUS
+END_ITER = 300000  # How many iterations to train for
 # END_ITER = 1
 LAMBDA = 10  # Gradient penalty lambda hyperparameter
 OUTPUT_DIM = DIM * DIM * 6 # Number of pixels in each image
@@ -86,14 +86,7 @@ INV_PARAM = 'J'
 #     item = gpu_stats.jsonify()["gpus"][device]
 #     print('Used/total: ' + "{}/{}".format(item["memory.used"], item["memory.total"]))
 
-# def proj_loss(fake_data, label):
-#     if INV_PARAM == 'p1':
-#         pass
-#     elif INV_PARAM == 'p2':
-#         #TODO: Needs to be fixed
-#         return torch.norm(grain_regularize_fn(fake_data, label))
-
-def proj_loss(fake_data, real_data, model):
+def proj_loss(fake_data, real_data, model, real_label):
     """
     Fake data requires to be pushed from tanh range to [0, 1]
     """
@@ -103,7 +96,9 @@ def proj_loss(fake_data, real_data, model):
     elif INV_PARAM == 'p2':
         return torch.norm(p2_fn(fake_data) - p2_fn(real_data))
     elif INV_PARAM == 'J':
-        p_loss = torch.norm(predict_J(model, fake_data) - predict_J(model, real_data))
+        #p_loss = torch.norm(predict_J(model, fake_data) - predict_J(model, real_data))
+        #or
+        p_loss = torch.norm(predict_J(model, fake_data) - real_label)
         return p_loss
 
 def weights_init(m):
@@ -128,8 +123,7 @@ def load_data(path_to_folder, train):
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
     ])
-    # if IMAGE_DATA_SET == 'lsun':
-    #    dataset =  datasets.LSUN(path_to_folder, classes=classes, transform=data_transform)
+
     if IMAGE_DATA_SET == 'matsci':
         dataset = MatSciDataset(path_to_folder)
     elif IMAGE_DATA_SET == 'polycrystal':
@@ -140,18 +134,16 @@ def load_data(path_to_folder, train):
         dataset = MicrostructureDataset(path_to_folder)
     else:
         dataset = datasets.ImageFolder(root=path_to_folder, transform=data_transform)
+    
     dataset_loader = torch.utils.data.DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True,
                                                  pin_memory=True)
     return dataset_loader
 
-
 def training_data_loader():
     return load_data(DATA_DIR, train='train')
 
-
 def val_data_loader():
     return load_data(VAL_DIR, train='valid')
-
 
 def calc_gradient_penalty(netD, real_data, fake_data):
     alpha = torch.rand(BATCH_SIZE, 1)
@@ -176,7 +168,6 @@ def calc_gradient_penalty(netD, real_data, fake_data):
     gradients = gradients.view(gradients.size(0), -1)
     gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean() * LAMBDA
     return gradient_penalty
-
 
 def generate_image(netG, noise=None, lv=None):
     if noise is None:
@@ -237,25 +228,25 @@ def train():
         gen_cost = None
         try:
             #real_data = next(dataiter)
-            real_data, real_p1 = next(dataiter)
+            real_data, real_label = next(dataiter)
         except StopIteration:
             dataiter = iter(dataloader)
             #real_data = dataiter.next()
-            real_data, real_p1 = dataiter.next()
+            real_data, real_label = dataiter.next()
 
         # p1 and p2_function are invariant checkers in models/checker.py (p1 for now)
-        # here regression should replace p1_fn, but should use real label or regressor
+        # here regression should replace p1_fn, but should use real label or regressor??
         if INV_PARAM == 'p1':
             real_p1 = p1_fn(real_data)
         elif INV_PARAM == 'p2':
             real_p1 = p2_fn(real_data.to(device))
         elif INV_PARAM == 'J':
             real_data = real_data.unsqueeze(1) #batch, 1, 128, 128
-            #real_p1 = predict_J(regressor , real_data.to(device))
-            real_p1 = regressor(real_data.to(device))
-        #real_p1 = real_label.unsqueeze(1)        # This is the label for the dataset. Currently either 20 or 100.
-        real_p1 = real_p1.unsqueeze(1)
-        real_p1 = real_p1.to(device)
+
+            #try to use real_label for all except when cannot for now
+            #real_p1 = regressor(real_data.to(device))
+            #real_p1 = real_p1.unsqueeze(1)
+            #real_p1 = real_p1.to(device)
 
         for i in range(GENER_ITERS):
             print("Generator iters: " + str(i))
@@ -264,8 +255,8 @@ def train():
             noise.requires_grad_(True)
 
             #z (batch,128), real_p1 (batch), making it (batch,129)?
-            fake_data = aG(noise, real_p1)
-            #print(fake_data)
+            #fake_data = aG(noise, real_p1)
+            fake_data = aG(noise, real_label)
             gen_cost = aD(fake_data)
             gen_cost = gen_cost.mean()
             gen_cost = -gen_cost
@@ -275,21 +266,19 @@ def train():
         end = timer()
 
         print(f'---train G elapsed time: {end - start}')
-        
         print('Fake Min:', fake_data.min(), 'Real Min:',real_data.min())
         print('Fake Max:', fake_data.max(), 'Real Max:',real_data.max())
  
-        # Projection steps
+        # Projection steps: ensures invariance
         pj_cost = None
         for i in range(PJ_ITERS):
             print('Projection iters: {}'.format(i))
             aG.zero_grad()
             noise = gen_rand_noise()
             noise.requires_grad=True
-            fake_data = aG(noise, real_p1)
-            # pj_cost = proj_loss(fake_data.view(-1,1,DIM, DIM), real_data.to(device))
-            #computes a normed error of real and fake data
-            pj_cost = proj_loss(fake_data.view(-1, CATEGORY, DIM, DIM), real_data.to(device), regressor.to(device))
+            #fake_data = aG(noise, real_p1)
+            fake_data = aG(noise, real_label)
+            pj_cost = proj_loss(fake_data.view(-1, CATEGORY, DIM, DIM), real_data.to(device), regressor.to(device), real_label)
             pj_cost = pj_cost.mean()
             pj_cost.backward()
             optimizer_pj.step()
@@ -325,17 +314,14 @@ def train():
                    real_p1 = p2_fn(real_data)
                 elif INV_PARAM == 'J':
                     real_data = real_data.unsqueeze(1)
-                    #real_p1 = predict_J(regressor, real_data)
-                    #real_p1 = label
-                    real_p1 = regressor(real_data.to(device))
-                # real_p1_v = real_p1
-                # real_p1 = batch_label.unsqueeze(1)  # This is the label for the dataset. Currently either 20 or 100.
-                real_p1 = real_p1.unsqueeze(1)
-                real_p1 = real_p1.to(device)
+                    # real_p1 = regressor(real_data.to(device))
+                    # real_p1 = real_p1.unsqueeze(1)
+                    # real_p1 = real_p1.to(device)
             end = timer();
             print(f'---gen G elapsed time: {end-start}')
             start = timer()
-            fake_data = aG(noisev, real_p1).detach()
+            #fake_data = aG(noisev, real_p1).detach()
+            fake_data = aG(noisev, real_label).detach()
             end = timer();
             print(f'---load real imgs elapsed time: {end-start}')
             start = timer()
@@ -463,18 +449,13 @@ if __name__ == '__main__':
         aG.apply(weights_init)
         aD.apply(weights_init)
 
-    LR = 1e-4
+    LR = 5e-6
     optimizer_g = torch.optim.Adam(aG.parameters(), lr=LR, betas=(0, 0.9))  # Gen loss
     optimizer_d = torch.optim.Adam(aD.parameters(), lr=LR, betas=(0, 0.9))  # Disc loss
     optimizer_pj = torch.optim.Adam(aG.parameters(), lr=LR, betas=(0, 0.9)) # Projection Loss
-    #one = torch.FloatTensor([1])
-    one = torch.FloatTensor([1])
-    mone = one * -1
+
     aG = aG.to(device)
     aD = aD.to(device)
-    one = one.to(device)
-    mone = mone.to(device)
-
     writer = SummaryWriter()
 
     train()
