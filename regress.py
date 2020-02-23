@@ -6,12 +6,12 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torchvision import datasets, transforms
 from torch.optim.lr_scheduler import StepLR
-import h5py
+#import h5py
 import matplotlib.pyplot as plt
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 
-#need to find a way to pull network from other folder
+
 class Net(nn.Module):
 	def __init__(self):
 		super(Net, self).__init__()
@@ -64,6 +64,43 @@ class Net(nn.Module):
 		h = self.dropout3(h)
 		h = F.relu(self.fc4(h))
 
+		h = h.squeeze() #squeezing to reduce dims from (64,1) to (64,) to match target
+		output = h
+		return output
+
+#joshua's model
+class Net2(nn.Module):
+	def __init__(self):
+		super(Net2, self).__init__()
+		#in_channel, out_channel, kernel_size, stride, padding=0 (default)
+
+		self.conv1 = nn.Conv2d(1, 16, 7, 1) 
+		self.bn1 = nn.BatchNorm2d(16)
+
+		self.conv2 = nn.Conv2d(16, 16, 5, 1)
+		self.bn2 = nn.BatchNorm2d(16)
+
+		self.dropout1 = nn.Dropout2d(0.3)
+		self.dropout2 = nn.Dropout2d(0.3)
+		self.dropout3 = nn.Dropout2d(0.3)
+
+		self.fc1 = nn.Linear(12544, 512)
+		self.fc2 = nn.Linear(512, 1)
+
+	def forward(self, x):
+
+		h = F.relu(self.conv1(x))
+		h = F.max_pool2d(h, kernel_size=2)
+		h = self.bn1(h)
+
+		h = F.relu(self.conv2(h))
+		h = F.max_pool2d(h, kernel_size=2)
+		h = self.bn2(h)
+
+		h = torch.flatten(h, start_dim=1) #flatten input of [bs, c, w, h], so from dim=1
+		h = F.relu(self.fc1(h))
+		h = self.dropout1(h)
+		h = F.relu(self.fc2(h))
 		h = h.squeeze() #squeezing to reduce dims from (64,1) to (64,) to match target
 		output = h
 		return output
