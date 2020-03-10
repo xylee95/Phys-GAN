@@ -193,10 +193,10 @@ class GoodGenerator(nn.Module):
 
         # self.conv1 = MyConvo2d(1*self.dim, 1, 3)
         # self.conv1 = MyConvo2d(1*self.dim, CATEGORY, 3)
-        self.conv1 = MyConvo2d(1 * self.dim, CATEGORY, 3)
+        self.conv1 = MyConvo2d(input_dim=1 * self.dim, output_dim=CATEGORY, kernel_size=3)
         self.relu = nn.ReLU()
         #self.tanh = nn.Tanh()
-        #self.sigmoid = nn.Sigmoid()
+        self.sigmoid = nn.Sigmoid()
 
     def forward(self, input, lv=None):
         if lv is not None:
@@ -210,11 +210,15 @@ class GoodGenerator(nn.Module):
         output = self.rb5(output)
         output = self.bn(output)
         output = self.relu(output)
+
         output = self.conv1(output)
-        output = self.softmax(output)
-        # output = torch.nn.functional.sigmoid(output)
+        # output = self.softmax(output)
+        output = torch.nn.functional.sigmoid(output)
         # output = torch.clamp(self.relu(output),0.0, 128*1.414)
-        output = output.view(-1, OUTPUT_DIM)
+        #output = output.view(-1, OUTPUT_DIM)
+        
+        #is clamping needed?
+        output = torch.clamp(output, 0.0, 1.0)
         return output
 
 class GoodDiscriminator(nn.Module):
@@ -229,8 +233,8 @@ class GoodDiscriminator(nn.Module):
         self.rb2 = ResidualBlock(2*self.dim, 4*self.dim, 3, resample = 'down', hw=int(DIM/2))
         self.rb3 = ResidualBlock(4*self.dim, 8*self.dim, 3, resample = 'down', hw=int(DIM/4))
         self.rb4 = ResidualBlock(8*self.dim, 8*self.dim, 3, resample = 'down', hw=int(DIM/8))
-      #  self.rb5 = ResidualBlock(8*self.dim, 8*self.dim, 3, resample = 'down', hw=int(DIM/8))
-        self.ln1 = nn.Linear(4*4*8*self.dim, 1)
+      # self.rb5 = ResidualBlock(8*self.dim, 8*self.dim, 3, resample = 'down', hw=int(DIM/8))
+        self.ln1 = nn.Linear(4*4*4*8*self.dim, 1)
 
     def forward(self, input):
         output = input.contiguous()
@@ -240,7 +244,8 @@ class GoodDiscriminator(nn.Module):
         output = self.rb2(output)
         output = self.rb3(output)
         output = self.rb4(output)
-        output = output.view(-1, 4*4*8*self.dim)
+        #shape output to have batch of 16 and whatever
+        output = output.view(-1, 4*4*4*8*self.dim)
         output = self.ln1(output)
         output = output.view(-1)
         return output

@@ -184,7 +184,7 @@ def train():
     #------Load regressor as invariant checker--------#
     #regressor = regress.Net()
     regressor = regress.Net2()
-    regressor.load_state_dict(torch.load('run_003_J_regressor.pt'))
+    regressor.load_state_dict(torch.load('run_005_J_smoothbalancedregressor.pt'))
     regressor.eval()
     regressor.to(device)
     for params in regressor.parameters(): #Freeze surrogate
@@ -450,7 +450,7 @@ if __name__ == '__main__':
         aG.apply(weights_init)
         aD.apply(weights_init)
 
-    LR = 5e-6
+    LR = 1e-5
     optimizer_g = torch.optim.Adam(aG.parameters(), lr=LR, betas=(0, 0.9))  # Gen loss
     optimizer_d = torch.optim.Adam(aD.parameters(), lr=LR, betas=(0, 0.9))  # Disc loss
     optimizer_pj = torch.optim.Adam(aG.parameters(), lr=LR, betas=(0, 0.9)) # Projection Loss
