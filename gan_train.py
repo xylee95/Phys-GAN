@@ -1,24 +1,14 @@
 import os, sys
-
 sys.path.append(os.getcwd())
-
 import time
 import functools
 import argparse
-
 import numpy as np
-# import sklearn.datasets
-
 import libs as lib
 import libs.plot
 from tensorboardX import SummaryWriter
-
-import pdb
-# import gpustat
-
 from models.wgan import *
 from models.checkers import *
-
 import torch
 import torchvision
 from torch import nn
@@ -27,9 +17,6 @@ from torch import optim
 from torchvision import transforms, datasets
 from torch.autograd import grad
 from timeit import default_timer as timer
-from matscidata import MatSciDataset
-from polycrystaldata import PolyCrystalDataset
-from voronoidata import VoronoiDataset
 from microstructure import MicrostructureDataset
 import torch.nn.init as init
 
@@ -38,7 +25,9 @@ import regress
 from regress import *
 
 #DATA_DIR = '/data/Bernard/DARPA_data/pytorch_data_train.npy'
-DATA_DIR = '/data/Bernard/DARPA_data/pytorch_balanced_data_train.npy'
+#DATA_DIR = '/data/Bernard/DARPA_data/pytorch_balanced_data_train.npy'
+#VAL_DIR = '/data/Bernard/DARPA_data/pytorch_data_test.npy'
+DATA_DIR = '/data/Bernard/DARPA_data/pytorch_balanced_fixed_flip_data_train.npy'
 VAL_DIR = '/data/Bernard/DARPA_data/pytorch_data_test.npy'
 
 IMAGE_DATA_SET = 'microstructure'
@@ -49,7 +38,6 @@ if len(DATA_DIR) == 0:
 
 RESTORE_MODE = False  # if True, it will load saved model from OUT_PATH and continue to train
 START_ITER = 0  # starting iteration
-# OUTPUT_PATH = './model_outputs_polycrystals2/'  # output path where result (.e.g drawing images, cost, chart) will be stored
 OUTPUT_PATH = './output/Debugging/'
 DIM = 128
 CRITIC_ITERS = 5  # How many iterations to train the critic for
@@ -57,28 +45,20 @@ GENER_ITERS = 1
 N_GPUS = 1  # Number of GPUs
 BATCH_SIZE = 16  # Batch size. Must be a multiple of N_GPUS
 END_ITER = 10000  # How many iterations to train for
-# END_ITER = 1
 LAMBDA = 10  # Gradient penalty lambda hyperparameter
 OUTPUT_DIM = DIM * DIM * 6 # Number of pixels in each image
 PJ_ITERS = 5
 INV_PARAM = 'J'
 
-# def showMemoryUsage(device=1):
-#     gpu_stats = gpustat.GPUStatCollection.new_query()
-#     item = gpu_stats.jsonify()["gpus"][device]
-#     print('Used/total: ' + "{}/{}".format(item["memory.used"], item["memory.total"]))
-
 def proj_loss(fake_data, real_data, model, real_label):
     """
     Fake data requires to be pushed from tanh range to [0, 1]
     """
-    if INV_PARAM == 'p1':
-        return torch.abs(p1_fn(fake_data) - p1_fn(real_data))
-    elif INV_PARAM == 'p2':
-        return torch.norm(p2_fn(fake_data) - p2_fn(real_data))
+    if INV_PARAM == 'JF':
+        p_loss = torch.norm(predict_J(model, fake_data) - predict_J(model, real_data))
+        return p_loss
     elif INV_PARAM == 'J':
         p_loss = torch.norm(predict_J(model, fake_data) - predict_J(model, real_data))
-        #or
         #p_loss = torch.norm(predict_J(model, fake_data) - real_label)
         return p_loss
 
@@ -105,14 +85,8 @@ def load_data(path_to_folder, train):
         transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
     ])
 
-    if IMAGE_DATA_SET == 'matsci':
-        dataset = MatSciDataset(path_to_folder)
-    elif IMAGE_DATA_SET == 'polycrystal':
-        dataset = PolyCrystalDataset(path_to_folder, mode=train)
-    elif IMAGE_DATA_SET == 'voronoi':
-        dataset = VoronoiDataset(path_to_folder)
-    elif IMAGE_DATA_SET == 'microstructure':
-        dataset = MicrostructureDataset(path_to_folder)
+    if IMAGE_DATA_SET == 'microstructure':
+        dataset = MicrostructureDataset(path_to_folder, mode=INV_PARAM)
     else:
         dataset = datasets.ImageFolder(root=path_to_folder, transform=data_transform)
     
@@ -183,8 +157,8 @@ def train():
 
     #------Load regressor as invariant checker--------#
     #regressor = regress.Net()
-    regressor = regress.Net2()
-    regressor.load_state_dict(torch.load('run_005_J_smoothbalancedregressor.pt'))
+    regressor = regress.Net3()
+    regressor.load_state_dict(torch.load('fixed_balanced_J3_regressor.pt', map_location='cuda:0'))
     regressor.eval()
     regressor.to(device)
     for params in regressor.parameters(): #Freeze surrogate
@@ -232,7 +206,7 @@ def train():
             noise = gen_rand_noise()    #generate random z vector (batch,128)
             noise.requires_grad_(True)
 
-            #z (batch,128), real_p1 (batch), making it (batch,129)?
+            #z (batch,128), real_p1 (batch), making it (batch,129)
             fake_data = aG(noise, real_p1)
             #fake_data = aG(noise, real_label)
             gen_cost = aD(fake_data)
@@ -403,36 +377,6 @@ def train():
         lib.plot.tick()
 
 if __name__ == '__main__':
-    # Training settings
-    # parser = argparse.ArgumentParser(description='InvNet to generate microstructure with regressor')
-    # parser.add_argument('--batch_size', type=int, default=256, metavar='N',
-    #                     help='input batch size for training (default: 64)')
-    # parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
-    #                     help='input batch size for testing (default: 1000)')
-    # parser.add_argument('--epochs', type=int, default=25, metavar='N',
-    #                     help='number of epochs to train (default: 10)')
-    # parser.add_argument('--lr', type=float, default=1E-4, metavar='LR',
-    #                     help='learning rate (default: 1.0)')
-    # parser.add_argument('--gamma', type=float, default=0.7, metavar='M',
-    #                     help='Learning rate step gamma (default: 0.7)')
-    # parser.add_argument('--no-cuda', action='store_true', default=False,
-    #                     help='disables CUDA training')
-    # parser.add_argument('--seed', type=int, default=0, metavar='S',
-    #                     help='random seed (default: 1)')
-    # parser.add_argument('--log-interval', type=int, default=10, metavar='N',
-    #                     help='how many batches to wait before logging training status')
-    # parser.add_argument('--save-model', action='store_true', default=True,
-    #                     help='For Saving the current Model')
-    # parser.add_argument('--model_dir', '-m', required=True,
-    #                     help='Directory to save the current Model')
-
-    # parser.add_argument('--batch_size', '-bs', type=int, default=16)
-    # parser.add_argument('--inv', '-inv', type=str, default='J')
-    # parser.add_argument('--mode', type='str', default='regressor', choices=('regressor', 'labels'))
-    # parser.add_argument('--start_iter', type=int, default=0)
-    # parser.add_argument('--end_iter', type=int, default=300000)
-    #args = parser.parse_args()
-
     cuda_available = torch.cuda.is_available()
     device = torch.device("cuda" if cuda_available else "cpu")
     fixed_noise = gen_rand_noise()
