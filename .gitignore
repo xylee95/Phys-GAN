@@ -111,7 +111,7 @@ fader-torch
 classification_models
 
 #nb files
-*.ipynb*
+#*.ipynb*
 
 #workspace file
 *workspace*
